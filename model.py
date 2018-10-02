@@ -6,7 +6,7 @@ import torch.nn as nn
 from torch.distributions import Normal
 
 from modules import baseline_network
-from modules import glimpse_network, core_network
+from modules import cnn_network, core_network
 from modules import action_network, location_network
 
 
@@ -56,13 +56,14 @@ class RecurrentAttention(nn.Module):
         super(RecurrentAttention, self).__init__()
         self.std = std
 
-        self.sensor = glimpse_network(h_g, h_l, g, k, s, c)
-        self.rnn = core_network(hidden_size, hidden_size)
+        self.cnn1 = cnn_network(h_g, h_l, g, k, s, c)
+        self.cnn2 = cnn_network(h_g, h_l, g, k, s, c)
+        self.rnn = core_network((h_g+h_l)*4, hidden_size)
         self.locator = location_network(hidden_size, 2, std)
         self.classifier = action_network(hidden_size, num_classes)
         self.baseliner = baseline_network(hidden_size, 1)
 
-    def forward(self, x, l_t_prev, h_t_prev, last=False):
+    def forward(self, x_a, x_b, l_t_a_prev, l_t_b1_prev, l_t_b2_prev, h_t_prev, last=False):
         """
         Run the recurrent attention model for 1 timestep
         on the minibatch of images `x`.
@@ -98,19 +99,25 @@ class RecurrentAttention(nn.Module):
           output log probability vector over the classes.
         - log_pi: a vector of length (B,).
         """
-        g_t = self.sensor(x, l_t_prev)
+
+        g_t_1 = self.cnn1(x_a, x_b, l_t_a_prev, l_t_b1_prev)
+        g_t_2 = self.cnn2(x_a, x_b, l_t_a_prev, l_t_b2_prev)
+        g_t = torch.cat((g_t_1, g_t_2), dim=1)
         h_t = self.rnn(g_t, h_t_prev)
-        mu, l_t = self.locator(h_t)
+        mu_a, l_t_a, mu_b1, l_t_b1, mu_b2, l_t_b2 = self.locator(h_t)
         b_t = self.baseliner(h_t).squeeze()
 
         # we assume both dimensions are independent
         # 1. pdf of the joint is the product of the pdfs
         # 2. log of the product is the sum of the logs
-        log_pi = Normal(mu, self.std).log_prob(l_t)
+        log_pi_a = Normal(mu_a, self.std).log_prob(l_t_a)
+        log_pi_b1 = Normal(mu_b1, self.std).log_prob(l_t_b1)
+        log_pi_b2 = Normal(mu_b2, self.std).log_prob(l_t_b2)
+        log_pi = torch.cat((log_pi_a, log_pi_b1, log_pi_b2), dim=1)
         log_pi = torch.sum(log_pi, dim=1)
 
         if last:
             log_probas = self.classifier(h_t)
-            return h_t, l_t, b_t, log_probas, log_pi
+            return h_t, l_t_a, l_t_b1, l_t_b2, b_t, log_probas, log_pi
 
-        return h_t, l_t, b_t, log_pi
+        return h_t, l_t_a, l_t_b1, l_t_b2, b_t, log_pi

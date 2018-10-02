@@ -1,9 +1,8 @@
 import torch
 import torch.nn.functional as F
+from torch.optim.lr_scheduler import ReduceLROnPlateau, ExponentialLR
 
-from torch.autograd import Variable
 import torch.optim as optim
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 import os
 import time
@@ -59,8 +58,10 @@ class Trainer(object):
         else:
             self.test_loader = data_loader
             self.num_test = len(self.test_loader.dataset)
-        self.num_classes = 10
-        self.num_channels = 1
+
+        # data params
+        self.num_classes = 2
+        self.num_channels = 3
 
         # training params
         self.epochs = config.epochs
@@ -100,7 +101,7 @@ class Trainer(object):
 
         # build RAM model
         self.model = RecurrentAttention(
-            self.patch_size, self.num_patches, self.glimpse_scale,
+            torch.tensor(self.patch_size, dtype=torch.long), self.num_patches, self.glimpse_scale,
             self.num_channels, self.loc_hidden, self.glimpse_hidden,
             self.std, self.hidden_size, self.num_classes,
         )
@@ -111,14 +112,17 @@ class Trainer(object):
             sum([p.data.nelement() for p in self.model.parameters()])))
 
         # # initialize optimizer and scheduler
-        # self.optimizer = optim.SGD(
-        #     self.model.parameters(), lr=self.lr, momentum=self.momentum,
+        self.optimizer = optim.SGD(
+            self.model.parameters(), lr=self.lr, momentum=self.momentum,
+        )
+        # self.optimizer = optim.Adam(
+        #     self.model.parameters(), lr=3e-4,
         # )
         # self.scheduler = ReduceLROnPlateau(
         #     self.optimizer, 'min', patience=self.lr_patience
         # )
-        self.optimizer = optim.Adam(
-            self.model.parameters(), lr=3e-4,
+        self.scheduler = ExponentialLR(
+            self.optimizer, gamma=0.985
         )
 
     def reset(self):
@@ -129,17 +133,15 @@ class Trainer(object):
         This is called once every time a new minibatch
         `x` is introduced.
         """
-        dtype = (
-            torch.cuda.FloatTensor if self.use_gpu else torch.FloatTensor
-        )
+        # TODO: Set Cuda if necessary
 
         h_t = torch.zeros(self.batch_size, self.hidden_size)
-        h_t = Variable(h_t).type(dtype)
 
-        l_t = torch.Tensor(self.batch_size, 2).uniform_(-1, 1)
-        l_t = Variable(l_t).type(dtype)
+        l_t_a = torch.Tensor(self.batch_size, 2).uniform_(-1, 1)
+        l_t_b1 = torch.Tensor(self.batch_size, 2).uniform_(-1, 1)
+        l_t_b2 = torch.Tensor(self.batch_size, 2).uniform_(-1, 1)
 
-        return h_t, l_t
+        return h_t, l_t_a, l_t_b1, l_t_b2
 
     def train(self):
         """
@@ -160,7 +162,7 @@ class Trainer(object):
         for epoch in range(self.start_epoch, self.epochs):
 
             print(
-                '\nEpoch: {}/{} - LR: {:.6f}'.format(
+                '\nEpoch: {}/{} - LR: {:.7f}'.format(
                     epoch+1, self.epochs, self.lr)
             )
 
@@ -170,8 +172,14 @@ class Trainer(object):
             # evaluate on validation set
             valid_loss, valid_acc = self.validate(epoch)
 
-            # # reduce lr if validation loss plateaus
-            # self.scheduler.step(valid_loss)
+            # reduce lr if validation loss plateaus
+            if type(self.scheduler) is ReduceLROnPlateau:
+                self.scheduler.step(valid_loss)
+            elif type(self.scheduler) is ExponentialLR:
+                self.scheduler.step()
+
+            if self.scheduler:
+                self.lr = self.scheduler.get_lr()[-1]
 
             is_best = valid_acc > self.best_valid_acc
             msg1 = "train loss: {:.3f} - train acc: {:.3f} "
@@ -213,9 +221,11 @@ class Trainer(object):
         tic = time.time()
         with tqdm(total=self.num_train) as pbar:
             for i, (x, y) in enumerate(self.train_loader):
+                # split images in a and b
+                x_a, x_b = torch.chunk(x, 2, dim=3)
+
                 if self.use_gpu:
-                    x, y = x.cuda(), y.cuda()
-                x, y = Variable(x), Variable(y)
+                    x_a, x_b, y = x_a.cuda(), x_b.cuda(), y.cuda()
 
                 plot = False
                 if (epoch % self.plot_freq == 0) and (i == 0):
@@ -223,7 +233,7 @@ class Trainer(object):
 
                 # initialize location vector and hidden state
                 self.batch_size = x.shape[0]
-                h_t, l_t = self.reset()
+                h_t, l_t_a, l_t_b1, l_t_b2 = self.reset()
 
                 # save images
                 imgs = []
@@ -235,20 +245,21 @@ class Trainer(object):
                 baselines = []
                 for t in range(self.num_glimpses - 1):
                     # forward pass through model
-                    h_t, l_t, b_t, p = self.model(x, l_t, h_t)
+
+                    h_t, l_t_a, l_t_b1, l_t_b2, b_t, p = self.model(x_a, x_b, l_t_a, l_t_b1, l_t_b2, h_t)
 
                     # store
-                    locs.append(l_t[0:9])
+                    locs.append(l_t_a[0:9])
                     baselines.append(b_t)
                     log_pi.append(p)
 
                 # last iteration
-                h_t, l_t, b_t, log_probas, p = self.model(
-                    x, l_t, h_t, last=True
+                h_t, l_t_a, l_t_b1, l_t_b2, b_t, log_probas, p = self.model(
+                    x_a, x_b, l_t_a, l_t_b1, l_t_b2, h_t, last=True
                 )
                 log_pi.append(p)
                 baselines.append(b_t)
-                locs.append(l_t[0:9])
+                locs.append(l_t_a[0:9])
 
                 # convert list to tensors and reshape
                 baselines = torch.stack(baselines).transpose(1, 0)
@@ -277,8 +288,8 @@ class Trainer(object):
                 acc = 100 * (correct.sum() / len(y))
 
                 # store
-                losses.update(loss.data[0], x.size()[0])
-                accs.update(acc.data[0], x.size()[0])
+                losses.update(loss, x.size()[0])
+                accs.update(acc, x.size()[0])
 
                 # compute gradients and update SGD
                 self.optimizer.zero_grad()
@@ -292,7 +303,7 @@ class Trainer(object):
                 pbar.set_description(
                     (
                         "{:.1f}s - loss: {:.3f} - acc: {:.3f}".format(
-                            (toc-tic), loss.data[0], acc.data[0]
+                            (toc-tic), loss, acc
                         )
                     )
                 )
@@ -335,31 +346,35 @@ class Trainer(object):
         accs = AverageMeter()
 
         for i, (x, y) in enumerate(self.valid_loader):
+            # split images in a and b
+            x_a, x_b = torch.chunk(x, 2, dim=3)
+
             if self.use_gpu:
-                x, y = x.cuda(), y.cuda()
-            x, y = Variable(x), Variable(y)
+                x_a, x_b, y = x_a.cuda(), x_b.cuda(), y.cuda()
 
             # duplicate 10 times
-            x = x.repeat(self.M, 1, 1, 1)
+            x_a = x_a.repeat(self.M, 1, 1, 1)
+            x_b = x_b.repeat(self.M, 1, 1, 1)
 
             # initialize location vector and hidden state
-            self.batch_size = x.shape[0]
-            h_t, l_t = self.reset()
+            self.batch_size = x_a.shape[0]
+            h_t, l_t_a, l_t_b1, l_t_b2 = self.reset()
 
             # extract the glimpses
             log_pi = []
             baselines = []
             for t in range(self.num_glimpses - 1):
                 # forward pass through model
-                h_t, l_t, b_t, p = self.model(x, l_t, h_t)
+                h_t, l_t_a, l_t_b1, l_t_b2, b_t, p = self.model(x_a, x_b, l_t_a, l_t_b1, l_t_b2, h_t)
 
                 # store
                 baselines.append(b_t)
                 log_pi.append(p)
 
+
             # last iteration
-            h_t, l_t, b_t, log_probas, p = self.model(
-                x, l_t, h_t, last=True
+            h_t, l_t_a, l_t_b1, l_t_b2, b_t, log_probas, p = self.model(
+                x_a, x_b, l_t_a, l_t_b1, l_t_b2, h_t, last=True
             )
             log_pi.append(p)
             baselines.append(b_t)
@@ -406,8 +421,8 @@ class Trainer(object):
             acc = 100 * (correct.sum() / len(y))
 
             # store
-            losses.update(loss.data[0], x.size()[0])
-            accs.update(acc.data[0], x.size()[0])
+            losses.update(loss, x.size()[0])
+            accs.update(acc, x.size()[0])
 
             # log to tensorboard
             if self.use_tensorboard:
@@ -431,7 +446,6 @@ class Trainer(object):
         for i, (x, y) in enumerate(self.test_loader):
             if self.use_gpu:
                 x, y = x.cuda(), y.cuda()
-            x, y = Variable(x, volatile=True), Variable(y)
 
             # duplicate 10 times
             x = x.repeat(self.M, 1, 1, 1)

@@ -105,10 +105,10 @@ def array2img(x):
 def plot_images(images, gd_truth):
 
     images = images.squeeze()
-    assert len(images) == len(gd_truth) == 9
+    assert len(images) == len(gd_truth) == 16
 
     # Create figure with sub-plots.
-    fig, axes = plt.subplots(3, 3)
+    fig, axes = plt.subplots(4, 4)
 
     for i, ax in enumerate(axes.flat):
         # plot the image
@@ -130,8 +130,8 @@ def prepare_dirs(config):
 
 def save_config(config):
     model_name = 'ram_{}_{}x{}_{}'.format(
-        config.num_glimpses, config.patch_size,
-        config.patch_size, config.glimpse_scale
+        config.num_glimpses, config.patch_size[0],
+        config.patch_size[1], config.glimpse_scale
     )
     filename = model_name + '_params.json'
     param_path = os.path.join(config.ckpt_dir, filename)
