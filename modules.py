@@ -58,10 +58,8 @@ class retina(object):
             w = phi[i].shape[-1] // self.g[1]
             phi[i] = F.avg_pool2d(phi[i], (h, w))
 
-        # concatenate into a single tensor and flatten
-        phi = torch.stack(phi, dim=1)
-        # TODO: Should I flater or not???
-        phi = phi.view(phi.shape[0], -1)
+        # concatenate into a single tensor
+        phi = torch.cat(phi, dim=1)
         return phi
 
     def extract_patch(self, x, l, patch_size):
@@ -174,20 +172,39 @@ class glimpse_network(nn.Module):
       representation returned by the glimpse network for the
       current timestep `t`.
     """
-    def __init__(self, h_g, h_l, g, k, s, c):
+    def __init__(self, h_g, g, k, s):
         super(glimpse_network, self).__init__()
         self.retina = retina(g, k, s)
 
-        # glimpse layer
-        D_in = k*c*g[0]*g[1]
-        self.fc1 = nn.Linear(D_in, h_g)
+        # convolutional layers
+        self.glimpse_conv = nn.Sequential(
+            nn.Conv2d(3*k, 64, kernel_size=5, padding=2),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.ReLU()
+        )
+
+        # glimpse fc layer
+        self.glimpse_fc = nn.Sequential(
+            nn.Linear(g[0]*g[1]*128, 1024),
+            nn.ReLU()
+        )
 
         # location layer
-        D_in = 2
-        self.fc2 = nn.Linear(D_in, h_l)
+        self.glimpse_loc = nn.Sequential(
+            nn.Linear(2, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 1024),
+            nn.ReLU()
+        )
 
-        self.fc3 = nn.Linear(h_g, h_g+h_l)
-        self.fc4 = nn.Linear(h_l, h_g+h_l)
+        self.glimpse_emission = nn.Sequential(
+            nn.Linear(512, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 2)
+        )
 
     def forward(self, x, l_t_prev):
         # generate glimpse phi from image x
@@ -197,24 +214,22 @@ class glimpse_network(nn.Module):
         l_t_prev = l_t_prev.view(l_t_prev.size(0), -1)
 
         # feed phi and l to respective fc layers
-        phi_out = F.relu(self.fc1(phi))
-        l_out = F.relu(self.fc2(l_t_prev))
+        phi = self.glimpse_conv(phi)
+        phi = phi.view(phi.size(0), -1)
 
-        what = self.fc3(phi_out)
-        where = self.fc4(l_out)
+        what = self.glimpse_fc(phi)
+        where = self.glimpse_loc(l_t_prev)
 
         # feed to fc layer
-        g_t = F.relu(what + where)
-
+        g_t = torch.mul(what, where)
         return g_t
 
-class cnn_network(nn.Module):
 
+class cnn_network(nn.Module):
     def __init__(self, h_g, h_l, g, k, s, c):
         super(cnn_network, self).__init__()
-        self.a = glimpse_network(h_g, h_l, g, k, s, c)
-        self.b = glimpse_network(h_g, h_l, g, k, s, c)
-
+        self.a = glimpse_network(h_g, g, k, s)
+        self.b = glimpse_network(h_g, g, k, s)
 
     def forward(self, x_a, x_b, l_t_a_prev, l_t_b_prev):
         g_t_a = self.a(x_a, l_t_a_prev)
@@ -255,16 +270,14 @@ class core_network(nn.Module):
     """
     def __init__(self, input_size, hidden_size):
         super(core_network, self).__init__()
-        self.input_size = input_size
-        self.hidden_size = hidden_size
 
-        self.i2h = nn.Linear(input_size, hidden_size)
-        self.h2h = nn.Linear(hidden_size, hidden_size)
+        self.rnn_features = nn.GRUCell(input_size, hidden_size)
+        self.rnn_location = nn.GRUCell(hidden_size, hidden_size)
 
     def forward(self, g_t, h_t_prev):
-        h1 = self.i2h(g_t)
-        h2 = self.h2h(h_t_prev)
-        h_t = F.relu(h1 + h2)
+        h_1 = self.rnn_features(g_t, h_t_prev[0])
+        h_2 = self.rnn_location(h_1, h_t_prev[1])
+        h_t = (h_1, h_2)
         return h_t
 
 
@@ -381,5 +394,6 @@ class baseline_network(nn.Module):
         self.fc = nn.Linear(input_size, output_size)
 
     def forward(self, h_t):
+        h_t = h_t[0] + h_t[1]
         b_t = F.relu(self.fc(h_t.detach()))
         return b_t

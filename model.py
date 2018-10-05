@@ -58,7 +58,7 @@ class RecurrentAttention(nn.Module):
 
         self.cnn1 = cnn_network(h_g, h_l, g, k, s, c)
         self.cnn2 = cnn_network(h_g, h_l, g, k, s, c)
-        self.rnn = core_network((h_g+h_l)*4, hidden_size)
+        self.rnn = core_network(1024 * 2 * 2, hidden_size) # features * loc * nets
         self.locator = location_network(hidden_size, 2, std)
         self.classifier = action_network(hidden_size, num_classes)
         self.baseliner = baseline_network(hidden_size, 1)
@@ -104,7 +104,7 @@ class RecurrentAttention(nn.Module):
         g_t_2 = self.cnn2(x_a, x_b, l_t_a_prev, l_t_b2_prev)
         g_t = torch.cat((g_t_1, g_t_2), dim=1)
         h_t = self.rnn(g_t, h_t_prev)
-        mu_a, l_t_a, mu_b1, l_t_b1, mu_b2, l_t_b2 = self.locator(h_t)
+        mu_a, l_t_a, mu_b1, l_t_b1, mu_b2, l_t_b2 = self.locator(h_t[1])
         b_t = self.baseliner(h_t).squeeze()
 
         # we assume both dimensions are independent
@@ -117,7 +117,7 @@ class RecurrentAttention(nn.Module):
         log_pi = torch.sum(log_pi, dim=1)
 
         if last:
-            log_probas = self.classifier(h_t)
+            log_probas = self.classifier(h_t[0])
             return h_t, l_t_a, l_t_b1, l_t_b2, b_t, log_probas, log_pi
 
         return h_t, l_t_a, l_t_b1, l_t_b2, b_t, log_pi

@@ -135,7 +135,8 @@ class Trainer(object):
         """
         # TODO: Set Cuda if necessary
 
-        h_t = torch.zeros(self.batch_size, self.hidden_size)
+        h_t = (torch.zeros(self.batch_size, self.hidden_size),
+               torch.zeros(self.batch_size, self.hidden_size))
 
         l_t_a = torch.Tensor(self.batch_size, 2).uniform_(-1, 1)
         l_t_b1 = torch.Tensor(self.batch_size, 2).uniform_(-1, 1)
