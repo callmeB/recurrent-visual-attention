@@ -346,90 +346,92 @@ class Trainer(object):
         losses = AverageMeter()
         accs = AverageMeter()
 
-        for i, (x, y) in enumerate(self.valid_loader):
-            # split images in a and b
-            x_a, x_b = torch.chunk(x, 2, dim=3)
+        # validation doesn't require backward
+        with torch.no_grad():
+            for i, (x, y) in enumerate(self.valid_loader):
+                # split images in a and b
+                x_a, x_b = torch.chunk(x, 2, dim=3)
 
-            if self.use_gpu:
-                x_a, x_b, y = x_a.cuda(), x_b.cuda(), y.cuda()
+                if self.use_gpu:
+                    x_a, x_b, y = x_a.cuda(), x_b.cuda(), y.cuda()
 
-            # duplicate 10 times
-            x_a = x_a.repeat(self.M, 1, 1, 1)
-            x_b = x_b.repeat(self.M, 1, 1, 1)
+                # duplicate 10 times
+                x_a = x_a.repeat(self.M, 1, 1, 1)
+                x_b = x_b.repeat(self.M, 1, 1, 1)
 
-            # initialize location vector and hidden state
-            self.batch_size = x_a.shape[0]
-            h_t, l_t_a, l_t_b1, l_t_b2 = self.reset()
+                # initialize location vector and hidden state
+                self.batch_size = x_a.shape[0]
+                h_t, l_t_a, l_t_b1, l_t_b2 = self.reset()
 
-            # extract the glimpses
-            log_pi = []
-            baselines = []
-            for t in range(self.num_glimpses - 1):
-                # forward pass through model
-                h_t, l_t_a, l_t_b1, l_t_b2, b_t, p = self.model(x_a, x_b, l_t_a, l_t_b1, l_t_b2, h_t)
+                # extract the glimpses
+                log_pi = []
+                baselines = []
+                for t in range(self.num_glimpses - 1):
+                    # forward pass through model
+                    h_t, l_t_a, l_t_b1, l_t_b2, b_t, p = self.model(x_a, x_b, l_t_a, l_t_b1, l_t_b2, h_t)
+
+                    # store
+                    baselines.append(b_t)
+                    log_pi.append(p)
+
+
+                # last iteration
+                h_t, l_t_a, l_t_b1, l_t_b2, b_t, log_probas, p = self.model(
+                    x_a, x_b, l_t_a, l_t_b1, l_t_b2, h_t, last=True
+                )
+                log_pi.append(p)
+                baselines.append(b_t)
+
+                # convert list to tensors and reshape
+                baselines = torch.stack(baselines).transpose(1, 0)
+                log_pi = torch.stack(log_pi).transpose(1, 0)
+
+                # average
+                log_probas = log_probas.view(
+                    self.M, -1, log_probas.shape[-1]
+                )
+                log_probas = torch.mean(log_probas, dim=0)
+
+                baselines = baselines.contiguous().view(
+                    self.M, -1, baselines.shape[-1]
+                )
+                baselines = torch.mean(baselines, dim=0)
+
+                log_pi = log_pi.contiguous().view(
+                    self.M, -1, log_pi.shape[-1]
+                )
+                log_pi = torch.mean(log_pi, dim=0)
+
+                # calculate reward
+                predicted = torch.max(log_probas, 1)[1]
+                R = (predicted.detach() == y).float()
+                R = R.unsqueeze(1).repeat(1, self.num_glimpses)
+
+                # compute losses for differentiable modules
+                loss_action = F.nll_loss(log_probas, y)
+                loss_baseline = F.mse_loss(baselines, R)
+
+                # compute reinforce loss
+                adjusted_reward = R - baselines.detach()
+                loss_reinforce = torch.sum(-log_pi*adjusted_reward, dim=1)
+                loss_reinforce = torch.mean(loss_reinforce, dim=0)
+
+                # sum up into a hybrid loss
+                loss = loss_action + loss_baseline + loss_reinforce
+
+                # compute accuracy
+                correct = (predicted == y).float()
+                acc = 100 * (correct.sum() / len(y))
 
                 # store
-                baselines.append(b_t)
-                log_pi.append(p)
+                losses.update(loss, x_a.size()[0])
+                accs.update(acc, x_a.size()[0])
 
-
-            # last iteration
-            h_t, l_t_a, l_t_b1, l_t_b2, b_t, log_probas, p = self.model(
-                x_a, x_b, l_t_a, l_t_b1, l_t_b2, h_t, last=True
-            )
-            log_pi.append(p)
-            baselines.append(b_t)
-
-            # convert list to tensors and reshape
-            baselines = torch.stack(baselines).transpose(1, 0)
-            log_pi = torch.stack(log_pi).transpose(1, 0)
-
-            # average
-            log_probas = log_probas.view(
-                self.M, -1, log_probas.shape[-1]
-            )
-            log_probas = torch.mean(log_probas, dim=0)
-
-            baselines = baselines.contiguous().view(
-                self.M, -1, baselines.shape[-1]
-            )
-            baselines = torch.mean(baselines, dim=0)
-
-            log_pi = log_pi.contiguous().view(
-                self.M, -1, log_pi.shape[-1]
-            )
-            log_pi = torch.mean(log_pi, dim=0)
-
-            # calculate reward
-            predicted = torch.max(log_probas, 1)[1]
-            R = (predicted.detach() == y).float()
-            R = R.unsqueeze(1).repeat(1, self.num_glimpses)
-
-            # compute losses for differentiable modules
-            loss_action = F.nll_loss(log_probas, y)
-            loss_baseline = F.mse_loss(baselines, R)
-
-            # compute reinforce loss
-            adjusted_reward = R - baselines.detach()
-            loss_reinforce = torch.sum(-log_pi*adjusted_reward, dim=1)
-            loss_reinforce = torch.mean(loss_reinforce, dim=0)
-
-            # sum up into a hybrid loss
-            loss = loss_action + loss_baseline + loss_reinforce
-
-            # compute accuracy
-            correct = (predicted == y).float()
-            acc = 100 * (correct.sum() / len(y))
-
-            # store
-            losses.update(loss, x.size()[0])
-            accs.update(acc, x.size()[0])
-
-            # log to tensorboard
-            if self.use_tensorboard:
-                iteration = epoch*len(self.valid_loader) + i
-                log_value('valid_loss', losses.avg, iteration)
-                log_value('valid_acc', accs.avg, iteration)
+                # log to tensorboard
+                if self.use_tensorboard:
+                    iteration = epoch*len(self.valid_loader) + i
+                    log_value('valid_loss', losses.avg, iteration)
+                    log_value('valid_acc', accs.avg, iteration)
 
         return losses.avg, accs.avg
 
