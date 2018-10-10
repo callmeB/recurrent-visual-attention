@@ -119,5 +119,4 @@ class RecurrentAttention(nn.Module):
         if last:
             log_probas = self.classifier(h_t[0])
             return h_t, l_t_a, l_t_b1, l_t_b2, b_t, log_probas, log_pi
-
         return h_t, l_t_a, l_t_b1, l_t_b2, b_t, log_pi

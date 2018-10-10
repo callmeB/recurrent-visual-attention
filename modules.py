@@ -200,12 +200,6 @@ class glimpse_network(nn.Module):
             nn.ReLU()
         )
 
-        self.glimpse_emission = nn.Sequential(
-            nn.Linear(512, 1024),
-            nn.ReLU(),
-            nn.Linear(1024, 2)
-        )
-
     def forward(self, x, l_t_prev):
         # generate glimpse phi from image x
         phi = self.retina.foveate(x, l_t_prev)
@@ -348,15 +342,29 @@ class location_network(nn.Module):
     def __init__(self, input_size, output_size, std):
         super(location_network, self).__init__()
         self.std = std
-        self.fc_a = nn.Linear(input_size, output_size)
-        self.fc_b1 = nn.Linear(input_size, output_size)
-        self.fc_b2 = nn.Linear(input_size, output_size)
+
+
+        self.locator_a = nn.Sequential(
+            nn.Linear(input_size, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 2)
+        )
+        self.locator_b1 = nn.Sequential(
+            nn.Linear(input_size, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 2)
+        )
+        self.locator_b2 = nn.Sequential(
+            nn.Linear(input_size, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 2)
+        )
 
     def forward(self, h_t):
         # compute means
-        mu_a = torch.tanh(self.fc_a(h_t.detach()))
-        mu_b1 = torch.tanh(self.fc_b1(h_t.detach()))
-        mu_b2 = torch.tanh(self.fc_b2(h_t.detach()))
+        mu_a = torch.tanh(self.locator_a(h_t.detach()))
+        mu_b1 = torch.tanh(self.locator_b1(h_t.detach()))
+        mu_b2 = torch.tanh(self.locator_b2(h_t.detach()))
 
         # reparametrization trick
         noise = torch.empty_like(mu_a)
