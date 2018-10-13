@@ -16,7 +16,7 @@ def add_argument_group(name):
 
 # glimpse network params
 glimpse_arg = add_argument_group('Glimpse Network Params')
-glimpse_arg.add_argument('--patch_size', nargs='+', type=int, default=[32, 32],
+glimpse_arg.add_argument('--patch_size', nargs='+', type=int, default=[15, 7],
                          help='size of extracted patch at highest res')
 glimpse_arg.add_argument('--glimpse_scale', type=int, default=1.5,
                          help='scale of successive patches')

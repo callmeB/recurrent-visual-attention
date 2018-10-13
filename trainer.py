@@ -234,40 +234,15 @@ class Trainer(object):
 
                 # initialize location vector and hidden state
                 self.batch_size = x.shape[0]
-                h_t, l_t_a, l_t_b1, l_t_b2 = self.reset()
 
                 # save images
                 imgs = []
                 imgs.append(x[0:9])
 
-                # extract the glimpses
-                locs = []
-                log_pi = []
-                baselines = []
-                for t in range(self.num_glimpses - 1):
-                    # forward pass through model
-
-                    h_t, l_t_a, l_t_b1, l_t_b2, b_t, p = self.model(x_a, x_b, l_t_a, l_t_b1, l_t_b2, h_t)
-
-                    # store
-                    locs.append(l_t_a[0:9])
-                    baselines.append(b_t)
-                    log_pi.append(p)
-
-                # last iteration
-                h_t, l_t_a, l_t_b1, l_t_b2, b_t, log_probas, p = self.model(
-                    x_a, x_b, l_t_a, l_t_b1, l_t_b2, h_t, last=True
-                )
-                log_pi.append(p)
-                baselines.append(b_t)
-                locs.append(l_t_a[0:9])
-
-                # convert list to tensors and reshape
-                baselines = torch.stack(baselines).transpose(1, 0)
-                log_pi = torch.stack(log_pi).transpose(1, 0)
+                log_probas, log_pis, baselines, locs, locs_mu = self.model(x_a, x_b, self.num_glimpses)
 
                 # calculate reward
-                predicted = torch.max(log_probas, 1)[1]
+                predicted = torch.argmax(log_probas, 1)
                 R = (predicted.detach() == y).float()
                 R = R.unsqueeze(1).repeat(1, self.num_glimpses)
 
@@ -278,11 +253,59 @@ class Trainer(object):
                 # compute reinforce loss
                 # summed over timesteps and averaged across batch
                 adjusted_reward = R - baselines.detach()
-                loss_reinforce = torch.sum(-log_pi*adjusted_reward, dim=1)
+                loss_reinforce = torch.sum(-log_pis * adjusted_reward, dim=1)
                 loss_reinforce = torch.mean(loss_reinforce, dim=0)
 
                 # sum up into a hybrid loss
                 loss = loss_action + loss_baseline + loss_reinforce
+
+
+
+
+
+                # # extract the glimpses
+                # locs = []
+                # log_pi = []
+                # baselines = []
+                # for t in range(self.num_glimpses - 1):
+                #     # forward pass through model
+                #
+                #     h_t, l_t_a, l_t_b1, l_t_b2, b_t, p = self.model(x_a, x_b, l_t_a, l_t_b1, l_t_b2, h_t)
+                #
+                #     # store
+                #     locs.append(l_t_a[0:9])
+                #     baselines.append(b_t)
+                #     log_pi.append(p)
+                #
+                # # last iteration
+                # h_t, l_t_a, l_t_b1, l_t_b2, b_t, log_probas, p = self.model(
+                #     x_a, x_b, l_t_a, l_t_b1, l_t_b2, h_t, last=True
+                # )
+                # log_pi.append(p)
+                # baselines.append(b_t)
+                # locs.append(l_t_a[0:9])
+                #
+                # # convert list to tensors and reshape
+                # baselines = torch.stack(baselines).transpose(1, 0)
+                # log_pi = torch.stack(log_pi).transpose(1, 0)
+                #
+                # # calculate reward
+                # predicted = torch.max(log_probas, 1)[1]
+                # R = (predicted.detach() == y).float()
+                # R = R.unsqueeze(1).repeat(1, self.num_glimpses)
+                #
+                # # compute losses for differentiable modules
+                # loss_action = F.nll_loss(log_probas, y)
+                # loss_baseline = F.mse_loss(baselines, R)
+                #
+                # # compute reinforce loss
+                # # summed over timesteps and averaged across batch
+                # adjusted_reward = R - baselines.detach()
+                # loss_reinforce = torch.sum(-log_pi*adjusted_reward, dim=1)
+                # loss_reinforce = torch.mean(loss_reinforce, dim=0)
+                #
+                # # sum up into a hybrid loss
+                # loss = loss_action + loss_baseline + loss_reinforce
 
                 # compute accuracy
                 correct = (predicted == y).float()
