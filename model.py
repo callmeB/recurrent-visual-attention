@@ -90,8 +90,10 @@ class RecurrentAttention(nn.Module):
     def forward(self, x_a, x_b, num_glimpses):
         B, C, H, W = x_a.shape
 
-        h_t_a = torch.zeros(2, B, 1024)
-        h_t_b = torch.zeros(2, B, 1024)
+        h_t_a = {"features": torch.zeros(B, 1024),
+                 "locations": torch.zeros(B, 1024)}
+        h_t_b = {"features": torch.zeros(B, 1024),
+                 "locations": torch.zeros(B, 1024)}
 
         locs = []
         locs_mu = []
@@ -120,17 +122,17 @@ class RecurrentAttention(nn.Module):
             glimpse_a = torch.mul(features_a, location_a)
             glimpse_b = torch.mul(features_b, location_b)
 
-            h_t_a[0] = self.rnn_glimpses(glimpse_a, h_t_a[0])
-            h_t_a[1] = self.rnn_locations(h_t_a[0], h_t_a[1])
+            h_t_a["features"] = self.rnn_glimpses(glimpse_a, h_t_a["features"])
+            h_t_a["locations"] = self.rnn_locations(h_t_a["features"], h_t_a["locations"])
 
-            h_t_b[0] = self.rnn_glimpses(glimpse_b, h_t_b[0])
-            h_t_b[1] = self.rnn_locations(h_t_b[0], h_t_b[1])
+            h_t_b["features"] = self.rnn_glimpses(glimpse_b, h_t_b["features"])
+            h_t_b["locations"] = self.rnn_locations(h_t_b["features"], h_t_b["locations"])
 
-            baseline = self.baseline(torch.cat((h_t_a[1].detach(), h_t_b[1].detach()), dim=1)).squeeze()
+            baseline = self.baseline(torch.cat((h_t_a["locations"].detach(), h_t_b["locations"].detach()), dim=1)).squeeze()
             baselines.append(baseline)
 
-            mu_a = self.emission(h_t_a[1].detach())
-            mu_b = self.emission(h_t_b[1].detach())
+            mu_a = self.emission(h_t_a["locations"].detach())
+            mu_b = self.emission(h_t_b["locations"].detach())
 
             mu = torch.cat((mu_a, mu_b), dim=1)
 
@@ -152,7 +154,7 @@ class RecurrentAttention(nn.Module):
 
             loc_a, loc_b = torch.chunk(loc, 2, dim=1)
 
-        features = torch.cat((h_t_a[0], h_t_b[0]), dim=1)
+        features = torch.cat((h_t_a["features"], h_t_b["features"]), dim=1)
         log_probas = F.log_softmax(self.classifier(features), dim=1)
 
         # convert list to tensors and reshape
