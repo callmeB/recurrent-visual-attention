@@ -16,7 +16,7 @@ def add_argument_group(name):
 
 # glimpse network params
 glimpse_arg = add_argument_group('Glimpse Network Params')
-glimpse_arg.add_argument('--patch_size', nargs='+', type=int, default=[15, 7],
+glimpse_arg.add_argument('--patch_size', nargs='+', type=int, default=[12, 6],
                          help='size of extracted patch at highest res')
 glimpse_arg.add_argument('--glimpse_scale', type=int, default=1.5,
                          help='scale of successive patches')
@@ -66,7 +66,7 @@ train_arg.add_argument('--momentum', type=float, default=0.9,
                        help='Nesterov momentum value')
 train_arg.add_argument('--epochs', type=int, default=200,
                        help='# of epochs to train for')
-train_arg.add_argument('--init_lr', type=float, default=1e-2,
+train_arg.add_argument('--init_lr', type=float, default=1e-1,
                        help='Initial learning rate value')
 train_arg.add_argument('--lr_patience', type=int, default=10,
                        help='Number of epochs to wait before reducing lr')
